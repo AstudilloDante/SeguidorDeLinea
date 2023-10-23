@@ -1,167 +1,100 @@
 #include <OrangutanMotors.h>
 #include <QTRSensors.h>
 
-// Definir pines para QTR-8 sensor
-#define NUM_SENSORS  8  // número de sensores usados
-#define NUM_SAMPLES_PER_SENSOR 5  // tiempo máximo para completar la lectura del sensor
-#define EMITTER_PIN   2  // Pin para emisor IR (opcional)
-
-// Inicializar sensor de línea
-QTRSensorsAnalog qtra((unsigned char[]) {0, 1, 2, 3, 4, 5, 6, 7}, NUM_SENSORS, NUM_SAMPLES_PER_SENSOR, EMITTER_PIN);
-unsigned int sensorValues[NUM_SENSORS];
 OrangutanMotors motors;
+QTRSensors qtr;
+const uint8_t SensorCount = 8;
+uint16_t sensorValues[SensorCount];
+int val = 0;
+const int maximum = 150;  //Valor de motores
+float VProporcional = 0.015;
+float VDerivativo = 0.2;
+float Vintegral = 0.0003;
+float Vreductor = 0.96;
+unsigned int last_Error = 0;
+long integral = 0;
 
-const int maximum = 180;
-
-int VProporcional = 5; //Últimos provados> 8 proporcional, 6 derivativo.
-
-int VDerivativo = 3; // Funcionó bastante mejor con los últimos provados,
-//                      pero los mnotores aún van más rápido que el error porcentual.
-
-int velcalibrate = 24;
-
-
-void setup()
-{
-  int inPin = 10;
-  int val = 0;
-  pinMode(9, OUTPUT);
-  pinMode(8, OUTPUT);
-  pinMode(inPin, INPUT_PULLUP);
-
-  val = digitalRead(inPin);
-  while (val == HIGH)
-    {
-      digitalWrite(9,HIGH);
-      digitalWrite(8,HIGH);
-      val = digitalRead(inPin);
-    };
-  if (val == LOW)
-    {
-      digitalWrite(9,LOW);
-      digitalWrite(8,LOW);
-    };
-  motors.setSpeeds(0,0);
-
-  delay(1500);
-  digitalWrite(8, HIGH); 
-
-  
-  
-  for (int i = 0; i < 200; i++)  // make the calibration take about 10 seconds
-  {
-    qtra.calibrate();       // reads all sensors 10 times at 2.5 ms per six sensors (i.e. ~25 ms per call)
-  }
-
-  
-  digitalWrite(8, LOW);     // turn off Arduino's LED to indicate we are through with calibration
-
-  // print the calibration minimum values measured when emitters were on
-  Serial.begin(9600);
-  for (int i = 0; i < NUM_SENSORS; i++)
-  {
-    qtra.calibratedMinimumOn[i];
-  }
-  Serial.println();
-
-  // print the calibration maximum values measured when emitters were on
-  for (int i = 0; i < NUM_SENSORS; i++)
-  {
-    qtra.calibratedMaximumOn[i];
-  }
-  Serial.println();
-  Serial.println();
-  delay(1000);
-
-  val = digitalRead(inPin);
-
-  while (val == HIGH)
-    {
-      digitalWrite(8, HIGH);
-      delay(200);
-      digitalWrite(8, LOW);
-      delay(200);
-      val = digitalRead(inPin);
-      
-    };
-
-/*
-  digitalWrite(9,HIGH);
-  digitalWrite(8,HIGH);*/
-
- /* for (int counter = 0; counter<21; counter++)
-  {
-    if (counter<6||counter>=15)
-    OrangutanMotors::setSpeeds(-velcalibrate, velcalibrate);
-    else
-    OrangutanMotors::setSpeeds(velcalibrate,-velcalibrate);
-    qtra.calibrate();
-    delay(500);
-  }*/
-/*
-  digitalWrite(9,LOW);
-  digitalWrite(8,LOW);
-
-  
-
-  delay(200);
-
-  digitalWrite(9,HIGH);
-  digitalWrite(8,HIGH);
-
-  delay(200);
-  
-  digitalWrite(9,LOW);
-  digitalWrite(8,LOW);
-
-  delay(200);
-
-  digitalWrite(9,HIGH);
-  digitalWrite(8,HIGH);
-  delay(200);
-
-  digitalWrite(9,LOW);
-  digitalWrite(8,LOW);
-  delay(200);
-*/
-  /*while (val == HIGH)
-  {
-    digitalWrite(9,HIGH);
-    digitalWrite(8,HIGH);
-    val = digitalRead(inPin);
-  };
-  if (val == LOW)
-  {
-    digitalWrite(9,LOW);
-    digitalWrite(8,LOW);
-    delay(1000);
-  };*/
+void setup() {
+  pinMode(9, OUTPUT);  //led verde
+  pinMode(8, OUTPUT);  // led  rojo
+  pinMode(10, INPUT_PULLUP);// 
+  Serial.begin(9600);//iniciamos
   
 }
 
-unsigned int last_proportional = 0;
-long integral = 0;
-
 void loop() {
-    unsigned int position = qtra.readLine(map(sensorValues, 0, 1000, 1000, 0));
+  digitalWrite(8, HIGH);//luz roja, que se esta calibrando
+  for(int recalibracion = 1;recalibracion < 4; recalibracion++)//calibramos unas 3 veces para evitar problemas
+  {
+    calibracion();
+  }
+  digitalWrite(8, LOW);
+  digitalWrite(9, HIGH);//Encendemos luz verde de que ya se calibro correctamente
+  while(val == LOW )    //listo para la carrera
+  { 
+    ConfiguracionPID();//PID
+    val=digitalRead(10);//una ves termine la carrera presionamo para apagar los motores
+  }
+  motors.setSpeeds(0,0);
 
-    int proportional = (int)position - 2500;
+}
 
-    int derivative = proportional - last_proportional;
-    integral += proportional;
 
-    int power_difference = proportional/VProporcional + integral*0 + derivative*VDerivativo;
 
-    if(power_difference > maximum)
-    power_difference = maximum;
+void ConfiguracionPID()
+{
+  uint16_t position = qtr.readLineBlack(sensorValues);
 
-    if(power_difference < -maximum)
-    power_difference = -maximum;
+  int Error = (int)position - 3500;  // Valor promedio si los dos sensores en medio estan sobre la linea negra es 3500
+  
+  if (Error > -100 && Error < 100) return 0;// pequeñas variaciones pueden hacer que tambalee
 
-    if(power_difference < 0)
-      OrangutanMotors::setSpeeds(maximum, maximum + power_difference);
-    else
-      OrangutanMotors::setSpeeds(maximum - power_difference, maximum);
+  int derivative = Error - last_Error;
+  integral += Error;
+  last_Error = Error;
 
-    delay(1);
+  float power_difference = abs(Error * VProporcional + integral * Vintegral + derivative * VDerivativo);
+  if (power_difference>= 250)
+    power_difference=250;
+
+  if (power_difference = 0)//
+    motors.setSpeeds(250, 250);
+
+//si la pista no tiene giros de 90 grados pueden hacer comentarios los 'if'
+  if (position<2100) 
+    motors.setSpeeds(0,250);//90 grados a la izquierda
+  else if  (position>5200)//
+    motors.setSpeeds(250,0);//90 grados a la derecha
+//
+  if (power_difference < 0)
+    motors.setSpeeds(maximum * Vreductor, maximum + power_difference);  
+  else
+    motors.setSpeeds(maximum + power_difference, maximum * Vreductor);
+  
+}
+
+void calibracion ()
+{
+  // configure the sensors
+  qtr.setTypeAnalog();
+  qtr.setSensorPins((const uint8_t[]){A0, A1, A2, A3, A4, A5, A6, A7}, SensorCount);
+  qtr.setEmitterPin(2);
+
+  delay(500);
+  pinMode(LED_BUILTIN, OUTPUT);
+  digitalWrite(LED_BUILTIN, HIGH); // turn on Arduino's LED to indicate we are in calibration mode
+
+  // analogRead() takes about 0.1 ms on an AVR.
+  // 0.1 ms per sensor * 4 samples per sensor read (default) * 6 sensors
+  // * 10 reads per calibrate() call = ~24 ms per calibrate() call.
+  // Call calibrate() 400 times to make calibration take about 10 seconds.
+  for (uint16_t i = 0; i < 400; i++)
+  {
+    qtr.calibrate();
+  }
+  digitalWrite(LED_BUILTIN, LOW); // turn off Arduino's LED to indicate we are through with calibration
+
+  // print the calibration minimum values measured when emitters were on
+  
+  motors.setSpeeds(0, 0);
 }
